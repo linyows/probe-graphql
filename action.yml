@@ -1,0 +1,10 @@
+name: graphql
+description: Send a GraphQL query over HTTP
+runs:
+  using: binary
+  url: https://github.com/linyows/probe-graphql/releases/download/v0.1.0/probe-graphql_{os}_{arch}
+  checksums:
+    darwin_amd64: "2ca70d060d0231c9678da6f9bb47da12c526bbe2136a0163667f63ee9185027f"
+    darwin_arm64: "ba5eb9479ad7dd9b90be54f058684c3484624f7e22db75296922505ad55410d9"
+    linux_amd64: "07daf08cad937a223872e4a6be2654fb1a43a203a1fc7f34378179fdd04eb68a"
+    linux_arm64: "39e1e86fb3bac4f5be57ec6e60cd446c1950dbddde98ac62267f96e61e2b23bf"
