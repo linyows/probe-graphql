@@ -6,17 +6,34 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/linyows/probe/actionrpc"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 )
 
 // DefaultTimeout bounds a request whose step does not set with.timeout.
 const DefaultTimeout = 30 * time.Second
+
+// maxRedirects is how many redirects a request follows, as many as
+// net/http follows when it is not told otherwise.
+const maxRedirects = 10
+
+// params are the keys the action takes in with. action.yml declares them,
+// for probe check to report a key the action does not take.
+var params = []string{"url", "query", "variables", "operation_name", "headers", "timeout"}
+
+// keeps are the kinds of guard the action keeps to, as action.yml declares
+// them: it sends only a query under read-only, and connects only to a host
+// the run allows.
+var keeps = []string{actionrpc.KindReadOnly, actionrpc.KindAllowHost}
 
 // Action sends the GraphQL query a step describes and returns the response.
 type Action struct {
@@ -25,22 +42,71 @@ type Action struct {
 	client *http.Client
 }
 
-// Run sends the query in with. A response the server sends is a result,
-// whatever its status code or GraphQL errors; only a request that gets no
-// response is an error.
+// Run sends the query in with, under no guard.
 func (a *Action) Run(with map[string]any) (map[string]any, error) {
+	ret, _, err := a.RunStep(actionrpc.Call{With: with})
+	return ret, err
+}
+
+// RunStep sends the query in call.With under the guard of the run. A
+// response the server sends is a result, whatever its status code or
+// GraphQL errors; only a request that gets no response, or one the guard
+// refuses, is an error.
+func (a *Action) RunStep(call actionrpc.Call) (map[string]any, map[string]any, error) {
 	if a.log == nil {
 		a.log = hclog.NewNullLogger()
 	}
-	actionrpc.LogParams(a.log, "received request parameters", with)
+	actionrpc.LogParams(a.log, "received request parameters", call.With)
 
-	req, err := parseRequest(with)
+	req, err := parseRequest(call.With)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	ret, err := a.do(req)
+	if err := checkReadOnly(call.Guard, req); err != nil {
+		return nil, nil, err
+	}
+	ret, err := a.do(req, call.Guard)
 	actionrpc.LogOutcome(a.log, "graphql request", ret, err)
-	return ret, err
+	return ret, nil, err
+}
+
+// checkReadOnly returns a Refused error when the run is read-only and the
+// operation to run is not a query, or cannot be told: a mutation or a
+// subscription, a document that does not parse, or one with no operation
+// that operation_name selects.
+func checkReadOnly(guard actionrpc.Guard, r *request) error {
+	if !guard.ReadOnly {
+		return nil
+	}
+	doc, err := parser.ParseQuery(&ast.Source{Input: r.query})
+	if err != nil {
+		return actionrpc.Refuse("the run is read-only, and the query does not parse, so it cannot be told to read: %v", err)
+	}
+	op := doc.Operations.ForName(r.operationName)
+	if op == nil {
+		if r.operationName == "" {
+			return actionrpc.Refuse("the run is read-only, and the document has %d operations; name the one to run with operation_name", len(doc.Operations))
+		}
+		return actionrpc.Refuse("the run is read-only, and the document has no operation named %s", r.operationName)
+	}
+	if op.Operation != ast.Query {
+		return actionrpc.Refuse("the run is read-only, and the %s may write; only a query is sent", op.Operation)
+	}
+	return nil
+}
+
+// checkHost returns a Refused error when the guard does not allow the host
+// of u. A host without a port is taken at the port of its scheme.
+func checkHost(guard actionrpc.Guard, u *url.URL) error {
+	host := u.Host
+	if u.Port() == "" {
+		port := "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+		host = net.JoinHostPort(u.Hostname(), port)
+	}
+	return guard.CheckHost(host)
 }
 
 type request struct {
@@ -54,6 +120,12 @@ type request struct {
 
 func parseRequest(with map[string]any) (*request, error) {
 	r := &request{timeout: DefaultTimeout, headers: map[string]string{}}
+
+	for k := range with {
+		if !slices.Contains(params, k) {
+			return nil, fmt.Errorf("graphql action takes %s, not %s", strings.Join(params, ", "), k)
+		}
+	}
 
 	r.url, _ = with["url"].(string)
 	if r.url == "" {
@@ -123,7 +195,7 @@ func parseTimeout(v any) (time.Duration, error) {
 	}
 }
 
-func (a *Action) do(r *request) (map[string]any, error) {
+func (a *Action) do(r *request, guard actionrpc.Guard) (map[string]any, error) {
 	payload := map[string]any{"query": r.query}
 	if r.variables != nil {
 		payload["variables"] = r.variables
@@ -147,15 +219,31 @@ func (a *Action) do(r *request) (map[string]any, error) {
 		httpReq.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: r.timeout}
+	client := &http.Client{}
 	if a.client != nil {
-		client = a.client
-		client.Timeout = r.timeout
+		c := *a.client
+		client = &c
+	}
+	client.Timeout = r.timeout
+	// A redirect is followed only to a host the guard allows.
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return checkHost(guard, req.URL)
+	}
+	if err := checkHost(guard, httpReq.URL); err != nil {
+		return nil, err
 	}
 
 	start := time.Now()
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		// A redirect the guard refused is a refusal, not a failure to reach
+		// the server.
+		if refused := (*actionrpc.Refused)(nil); errors.As(err, &refused) {
+			return nil, refused
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()

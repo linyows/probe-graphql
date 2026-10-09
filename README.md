@@ -2,7 +2,7 @@
 
 A [Probe](https://github.com/mozership/probe) action that sends a GraphQL query over HTTP.
 
-Probe downloads it the first time a workflow uses it. It needs a Probe that supports external actions (v1.17.0 or later).
+Probe downloads it the first time a workflow uses it. It needs Probe v1.17.0 or later, and v1.21.0 or later to run under a guard, which reads the guard and the params the action declares in `action.yml`.
 
 ```yaml
 name: Countries API
@@ -35,6 +35,8 @@ Probe only takes a full 40-character commit SHA. The notes of each [release](htt
 | `headers` | Object | No | - | Request headers, such as `Authorization`. They override the defaults below |
 | `timeout` | Duration | No | `30s` | Time limit for the request, as `10s` or a number of seconds. `0` removes it |
 
+A key of `with` that is not one of these fails the step before anything is sent, and `probe check` reports it with its line.
+
 The request is a `POST` with a JSON body, sent with `Content-Type: application/json`, `Accept: application/graphql-response+json, application/json` and `User-Agent: probe-graphql/<version>`.
 
 ## Result
@@ -53,6 +55,15 @@ The request is a `POST` with a JSON body, sent with `Content-Type: application/j
 | `status` | Integer | `0` when the status code is 2xx, the body is JSON and `errors` is empty; `1` otherwise |
 
 Any response the server sends is a result, so a test can assert on a GraphQL error or a 500. Only a request that gets no response, such as a refused connection or a timeout, fails the step as an error.
+
+## Guard
+
+The action keeps to the guard of the run, and its `action.yml` declares `guard: [read-only, allow-host]`, so Probe runs it under `--read-only` and `--allow-host` without `--allow-action`.
+
+- Under `--read-only`, only a query is sent. The operation to run, the one `operation_name` names or the only one in the document, is read with a GraphQL parser, and a mutation or a subscription is refused before anything is sent. So is a document that does not parse, one with several operations and no `operation_name`, and an `operation_name` the document does not have.
+- Under `--allow-host`, the host of `url`, and of each redirect, must be one the run allows. A URL without a port is taken at the port of its scheme.
+
+A refused step fails with the kind `refused`.
 
 ## Releasing
 
