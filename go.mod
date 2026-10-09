@@ -1,4 +1,4 @@
-module github.com/linyows/probe-graphql
+module github.com/mozership/probe-graphql
 
 go 1.26.6
 

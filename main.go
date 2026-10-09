@@ -1,6 +1,6 @@
 // Command probe-graphql serves a Probe action that sends a GraphQL query over
 // HTTP. Probe starts it for a step that uses
-// github.com/linyows/probe-graphql@<commit>.
+// github.com/mozership/probe-graphql@<commit>.
 package main
 
 import (

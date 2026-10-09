@@ -7,7 +7,7 @@ set -eu
 
 tag=$1
 checksums=$2
-repo=${GITHUB_REPOSITORY:-linyows/probe-graphql}
+repo=${GITHUB_REPOSITORY:-mozership/probe-graphql}
 
 cat <<YAML
 name: graphql

@@ -10,7 +10,7 @@ jobs:
 - name: countries
   steps:
   - name: Look up Japan
-    uses: github.com/linyows/probe-graphql@<commit SHA>
+    uses: github.com/mozership/probe-graphql@<commit SHA>
     with:
       url: https://countries.trevorblades.com/graphql
       query: |
@@ -22,7 +22,7 @@ jobs:
     test: res.code == 200 && len(res.errors) == 0 && res.data.country.capital == "Tokyo"
 ```
 
-Probe only takes a full 40-character commit SHA. The notes of each [release](https://github.com/linyows/probe-graphql/releases) start with the `uses` line to copy.
+Probe only takes a full 40-character commit SHA. The notes of each [release](https://github.com/mozership/probe-graphql/releases) start with the `uses` line to copy.
 
 ## Parameters
 
