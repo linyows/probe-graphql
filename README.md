@@ -1,6 +1,6 @@
 # probe-graphql
 
-A [Probe](https://github.com/linyows/probe) action that sends a GraphQL query over HTTP.
+A [Probe](https://github.com/mozership/probe) action that sends a GraphQL query over HTTP.
 
 Probe downloads it the first time a workflow uses it. It needs a Probe that supports external actions (v1.17.0 or later).
 
