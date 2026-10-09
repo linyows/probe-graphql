@@ -12,6 +12,8 @@ repo=${GITHUB_REPOSITORY:-mozership/probe-graphql}
 cat <<YAML
 name: graphql
 description: Send a GraphQL query over HTTP
+guard: [read-only, allow-host]
+params: [url, query, variables, operation_name, headers, timeout]
 runs:
   using: binary
   url: https://github.com/${repo}/releases/download/${tag}/probe-graphql_{os}_{arch}

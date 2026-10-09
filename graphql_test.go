@@ -5,9 +5,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/linyows/probe/actionref"
+	"github.com/linyows/probe/actionrpc"
 )
 
 // server answers every request with code and body, and records the last
@@ -216,5 +224,115 @@ func TestParseTimeout(t *testing.T) {
 		if err != nil || got != tt.want {
 			t.Errorf("parseTimeout(%v) = %v, %v; want %v", tt.in, got, err, tt.want)
 		}
+	}
+}
+
+func TestRunStepReadOnly(t *testing.T) {
+	ts, rec := server(t, 200, "application/json", `{"data":{}}`)
+	host := strings.TrimPrefix(ts.URL, "http://")
+	guard := actionrpc.Guard{ReadOnly: true, AllowHosts: []string{host}}
+	tests := []struct {
+		name          string
+		query         string
+		operationName string
+		refused       string
+	}{
+		{name: "query", query: "query Me { viewer { login } }"},
+		{name: "shorthand", query: "{ viewer { login } }"},
+		{name: "named query of several", query: "query A { a } mutation B { b }", operationName: "A"},
+		{name: "mutation", query: "mutation { deleteUser(id: 1) }", refused: "the mutation may write"},
+		{name: "subscription", query: "subscription { events }", refused: "the subscription may write"},
+		{name: "named mutation of several", query: "query A { a } mutation B { b }", operationName: "B", refused: "the mutation may write"},
+		{name: "several without a name", query: "query A { a } query B { b }", refused: "has 2 operations"},
+		{name: "unknown name", query: "query A { a }", operationName: "Z", refused: "no operation named Z"},
+		{name: "does not parse", query: "query {", refused: "does not parse"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec.method = ""
+			with := map[string]any{"url": ts.URL, "query": tt.query}
+			if tt.operationName != "" {
+				with["operation_name"] = tt.operationName
+			}
+			_, _, err := (&Action{}).RunStep(actionrpc.Call{With: with, Guard: guard})
+			if tt.refused == "" {
+				if err != nil {
+					t.Fatalf("RunStep() error = %v, want the query sent", err)
+				}
+				if rec.method != http.MethodPost {
+					t.Error("the query was not sent")
+				}
+				return
+			}
+			if !actionrpc.IsRefused(err) || !strings.Contains(err.Error(), tt.refused) {
+				t.Errorf("RunStep() error = %v, want a refusal saying %q", err, tt.refused)
+			}
+			if rec.method != "" {
+				t.Error("a refused operation was sent")
+			}
+		})
+	}
+
+	// Without the guard a mutation is sent as it is.
+	rec.method = ""
+	if _, _, err := (&Action{}).RunStep(actionrpc.Call{With: map[string]any{"url": ts.URL, "query": "mutation { x }"}}); err != nil || rec.method != http.MethodPost {
+		t.Errorf("RunStep() without a guard: error = %v, sent = %v", err, rec.method != "")
+	}
+}
+
+func TestRunStepAllowHost(t *testing.T) {
+	ts, rec := server(t, 200, "application/json", `{"data":{}}`)
+	u, _ := url.Parse(ts.URL)
+	with := map[string]any{"url": ts.URL, "query": "{ a }"}
+
+	_, _, err := (&Action{}).RunStep(actionrpc.Call{With: with, Guard: actionrpc.Guard{AllowHosts: []string{"api.example.com"}}})
+	if !actionrpc.IsRefused(err) || rec.method != "" {
+		t.Errorf("RunStep() error = %v, sent = %v; want a refusal before sending", err, rec.method != "")
+	}
+
+	// A host without a port is any port of it.
+	if _, _, err := (&Action{}).RunStep(actionrpc.Call{With: with, Guard: actionrpc.Guard{AllowHosts: []string{u.Hostname()}}}); err != nil {
+		t.Errorf("RunStep() error = %v for an allowed host", err)
+	}
+
+	// A redirect to a host the run does not allow is refused.
+	front := httptest.NewServer(http.RedirectHandler(ts.URL, http.StatusTemporaryRedirect))
+	t.Cleanup(front.Close)
+	fu, _ := url.Parse(front.URL)
+	rec.method = ""
+	_, _, err = (&Action{}).RunStep(actionrpc.Call{
+		With:  map[string]any{"url": front.URL, "query": "{ a }"},
+		Guard: actionrpc.Guard{AllowHosts: []string{fu.Host}},
+	})
+	if !actionrpc.IsRefused(err) || rec.method != "" {
+		t.Errorf("RunStep() error = %v, sent = %v; want the redirect refused", err, rec.method != "")
+	}
+}
+
+func TestRunRefusesUnknownKey(t *testing.T) {
+	_, err := (&Action{}).Run(map[string]any{"url": "http://localhost", "query": "{ a }", "varables": map[string]any{}})
+	if err == nil || !strings.Contains(err.Error(), "not varables") {
+		t.Errorf("Run() error = %v, want one naming varables", err)
+	}
+}
+
+// TestManifestDeclares checks that the action.yml a release writes declares
+// the params and the guard the action has, so that probe check and the
+// guard of a run take it as it is.
+func TestManifestDeclares(t *testing.T) {
+	checksums := filepath.Join(t.TempDir(), "checksums.txt")
+	if err := os.WriteFile(checksums, []byte(strings.Repeat("a", 64)+"  probe-graphql_linux_amd64\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("sh", "scripts/action-yml.sh", "v0.0.0", checksums).Output()
+	if err != nil {
+		t.Fatalf("scripts/action-yml.sh: %v", err)
+	}
+	m, err := actionref.ParseManifest(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(m.Params, params) || !slices.Equal(m.Guard, keeps) {
+		t.Errorf("action.yml declares params %v and guard %v, want %v and %v", m.Params, m.Guard, params, keeps)
 	}
 }
