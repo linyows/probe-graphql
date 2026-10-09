@@ -1,10 +1,12 @@
 name: graphql
 description: Send a GraphQL query over HTTP
+guard: [read-only, allow-host]
+params: [url, query, variables, operation_name, headers, timeout]
 runs:
   using: binary
-  url: https://github.com/mozership/probe-graphql/releases/download/v0.1.1/probe-graphql_{os}_{arch}
+  url: https://github.com/mozership/probe-graphql/releases/download/v0.2.0/probe-graphql_{os}_{arch}
   checksums:
-    darwin_amd64: "eddd2466808a4175412774de0f4e5b3b0fd57ce69a00719591c0e961f380a8eb"
-    darwin_arm64: "e4e6cb6b167b2904574318d9eeb6c9342d0773164f854049d4b929fe4b8cc56c"
-    linux_amd64: "96c1dcd4602fb67b177ac76560184039b8b081b908729b8c5349a1a4d7f713ba"
-    linux_arm64: "1cf58e8931dad50dc508cbd310d0886dd18646b3235be9fabb471b77bed1205c"
+    darwin_amd64: "831813a619bee5a208b183a37f078d7dc06809db2b7b9519cdfaa911277cb97e"
+    darwin_arm64: "b5fe21a59df3974e290f2e43990bddc2842982e7069bcaf47e96fc07c9b1279f"
+    linux_amd64: "82f39049d94ef2859201d8bd92b24fd929b4c4d88a7fd0b3027ef049a133978f"
+    linux_arm64: "0f004bdf2df6dcc24961805f2bd28c4491c65ad386d729d0282020f4851f722b"
